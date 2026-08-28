@@ -30,6 +30,14 @@ export default {
                         + Add Level
                     </button>
 
+                    <button
+                        class="btn"
+                        @click="saveListChanges"
+                        :disabled="!hasChanges"
+                    >
+                        Save List Changes
+                    </button>
+
                     <button class="btn" @click="exportList">
                         Export List
                     </button>
@@ -752,6 +760,56 @@ export default {
 
             this.levels.splice(index, 1);
             this.hasChanges = true;
+        },
+
+        async saveListChanges() {
+            if (!this.hasChanges) {
+                return;
+            }
+
+            const levels = this.levels.map((level) =>
+                level.fullPath ||
+                `data/${level.path}.json`
+            );
+
+            try {
+                const response = await fetch(
+                    `${WORKER_URL}/update-list`,
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+
+                        body: JSON.stringify({
+                            levels,
+                        }),
+                    }
+                );
+
+                const result = await response.json();
+
+                if (!response.ok || !result.ok) {
+                 throw new Error(
+                        result.error ||
+                        result.githubResponse ||
+                        "Failed to save list changes."
+                    );
+                }
+
+                this.hasChanges = false;
+
+                alert(
+                    "Demon List order successfully saved to GitHub!"
+                );
+            } catch (error) {
+                console.error(error);
+
+             alert(
+                    `Failed to save list changes: ${error.message}`
+                );
+            }
         },
 
         moveUp(index) {
