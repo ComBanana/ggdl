@@ -1,4 +1,4 @@
-import { fetchList } from "../content.js";
+const WORKER_URL = "https://ggdl-admin-worker.jontereze.workers.dev";
 
 const EMPTY_LEVEL = () => ({
     id: "",
@@ -460,34 +460,67 @@ export default {
             this.error = false;
 
             try {
-                const result = await fetchList();
+                const response = await fetch(
+                    `${WORKER_URL}/get-list`
+                );
 
-                if (!result) {
-                    throw new Error("Failed to fetch list");
+                const result = await response.json();
+
+                if (!response.ok || !result.ok) {
+                    throw new Error(
+                        result.error || "Failed to load list"
+                    );
                 }
 
-                this.levels = result.map(([level, error]) => {
-                    if (error || !level) {
-                        return {
-                            ...EMPTY_LEVEL(),
-                            name: error || "Unknown Level",
-                            path: error || "",
-                            loadError: true,
-                        };
-                    }
-
-                    return {
+                this.levels = result.levels.map(
+                    (path) => ({
                         ...EMPTY_LEVEL(),
-                        ...clone(level),
-                        path: level.path,
-                        records: Array.isArray(level.records)
-                            ? clone(level.records)
-                            : [],
-                        creators: Array.isArray(level.creators)
-                            ? [...level.creators]
-                            : [],
-                    };
-                });
+                        path: path.replace(/^data\//, "")
+                            .replace(/\.json$/, ""),
+                        fullPath: path,
+                        name: path,
+                        loadingDetails: true,
+                    })
+                );
+
+                await Promise.all(
+                    this.levels.map(async (level, index) => {
+                        const response = await fetch(
+                            `${WORKER_URL}/get-level?path=${encodeURIComponent(
+                                level.fullPath
+                            )}`
+                        );
+
+                        const result = await response.json();
+
+                        if (!response.ok || !result.ok) {
+                            throw new Error(
+                                result.error ||
+                                `Failed to load ${level.fullPath}`
+                            );
+                        }
+
+                        this.levels[index] = {
+                            ...EMPTY_LEVEL(),
+                            ...clone(result.level),
+                            path: result.file
+                                .replace(/^data\//, "")
+                                .replace(/\.json$/, ""),
+                            fullPath: result.file,
+                            records: Array.isArray(
+                                result.level.records
+                            )
+                                ? clone(result.level.records)
+                                : [],
+                            creators: Array.isArray(
+                                result.level.creators
+                            )
+                                ? [...result.level.creators]
+                                : [],
+                            loadingDetails: false,
+                        };
+                    })
+                );
 
                 this.hasChanges = false;
             } catch (error) {
@@ -526,16 +559,18 @@ export default {
             this.editingIndex = null;
         },
 
-        saveLevel() {
+        async saveLevel() {
             const path = this.form.path.trim();
             const name = this.form.name.trim();
 
             if (!path || !name) {
-                alert("Please enter both a level path and level name.");
+                alert(
+                    "Please enter both a level path and level name."
+                );
                 return;
             }
 
-            if (!/^[a-zA-Z0-9_\\-]+$/.test(path)) {
+            if (!/^[a-zA-Z0-9_\-]+$/.test(path)) {
                 alert(
                     "Level path may only contain letters, numbers, underscores, and hyphens."
                 );
@@ -546,49 +581,139 @@ export default {
                 this.form.percentToQualify < 0 ||
                 this.form.percentToQualify > 100
             ) {
-                alert("Percent to qualify must be between 0 and 100.");
+                alert(
+                    "Percent to qualify must be between 0 and 100."
+                );
                 return;
             }
 
             const duplicateIndex = this.levels.findIndex(
                 (level, index) =>
-                    level.path.toLowerCase() === path.toLowerCase() &&
+                    level.path.toLowerCase() ===
+                        path.toLowerCase() &&
                     index !== this.editingIndex
             );
 
             if (duplicateIndex !== -1) {
-                alert(`A level with the path "${path}" already exists.`);
+                alert(
+                    `A level with the path "${path}" already exists.`
+                );
                 return;
             }
 
-            const level = {
-                ...clone(this.form),
-                path,
-                name,
+            const levelData = {
                 id: this.form.id === ""
                     ? ""
                     : Number(this.form.id),
-                percentToQualify: Number(this.form.percentToQualify) || 0,
+
+                name,
+
+                author: String(
+                    this.form.author || ""
+                ).trim(),
+
                 creators: Array.isArray(this.form.creators)
-                    ? this.form.creators.filter(Boolean)
+                    ? this.form.creators
+                        .map((creator) => creator.trim())
+                        .filter(Boolean)
                     : [],
-                records: this.form.records.map((record) => ({
-                    user: String(record.user || "").trim(),
-                    link: String(record.link || "").trim(),
-                    percent: Number(record.percent) || 0,
-                    hz: Number(record.hz) || 0,
-                    ...(record.mobile ? { mobile: true } : {}),
-                })),
+
+                verifier: String(
+                    this.form.verifier || ""
+                ).trim(),
+
+                verification: String(
+                    this.form.verification || ""
+                ).trim(),
+
+                percentToQualify:
+                    Number(this.form.percentToQualify) || 0,
+
+                password: String(
+                    this.form.password || ""
+                ).trim(),
+
+                records: this.form.records.map(
+                    (record) => ({
+                        user: String(
+                            record.user || ""
+                        ).trim(),
+
+                        link: String(
+                            record.link || ""
+                        ).trim(),
+
+                        percent:
+                            Number(record.percent) || 0,
+
+                        hz:
+                            Number(record.hz) || 0,
+
+                        ...(record.mobile
+                            ? { mobile: true }
+                            : {}),
+                    })
+                ),
             };
 
-            if (this.editingIndex === null) {
-                this.levels.push(level);
-            } else {
-                this.levels[this.editingIndex] = level;
-            }
+            const githubPath =
+                `data/${path}.json`;
 
-            this.hasChanges = true;
-            this.closeModal();
+            try {
+                const response = await fetch(
+                    `${WORKER_URL}/update-level`,
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json",
+                        },
+
+                        body: JSON.stringify({
+                            path: githubPath,
+                            level: levelData,
+                        }),
+                    }
+                );
+
+                const result = await response.json();
+
+                if (!response.ok || !result.ok) {
+                    throw new Error(
+                        result.error ||
+                        result.githubResponse ||
+                        "Failed to update level."
+                    );
+                }
+
+                const updatedLevel = {
+                    ...levelData,
+                    path,
+                    fullPath: githubPath,
+                };
+
+                if (this.editingIndex === null) {
+                    this.levels.push(updatedLevel);
+                } else {
+                    this.levels[this.editingIndex] =
+                        updatedLevel;
+                }
+
+                this.hasChanges = false;
+
+                this.closeModal();
+
+                alert(
+                    `"${name}" was successfully saved to GitHub!`
+                );
+            } catch (error) {
+                console.error(error);
+
+                alert(
+                    `Failed to save level: ${error.message}`
+                );
+            }
         },
 
         addRecord() {
