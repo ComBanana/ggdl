@@ -1,24 +1,52 @@
 import { round, calculateScores } from "./score.js";
 
+const WORKER_URL = "https://ggdl-admin-worker.jontereze.workers.dev";
+
 /**
  * Path to directory containing `_list.json` and all levels
  */
 const dir = "/data";
 
 export async function fetchList() {
-    const listResult = await fetch(`${dir}/_list.json`);
-    const packResult = await fetch(`${dir}/_packlist.json`);
     try {
-        const list = await listResult.json();
+        // Load the current list from the Admin Worker
+        const listResult = await fetch(`${WORKER_URL}/get-list`);
+
+        if (!listResult.ok) {
+            throw new Error("Failed to load list from Worker.");
+        }
+
+        const listData = await listResult.json();
+        const list = listData.levels;
+
+        // Packs still come from the website's static files
+        const packResult = await fetch(`${dir}/_packlist.json`);
+
+        if (!packResult.ok) {
+            throw new Error("Failed to load pack list.");
+        }
+
         const packsList = await packResult.json();
+
         return await Promise.all(
             list.map(async (path, rank) => {
-                const levelResult = await fetch(`${dir}/${path}.json`);
                 try {
-                    const level = await levelResult.json();
-                    let packs = packsList.filter((x) =>
+                    // Load each level from the Admin Worker
+                    const levelResult = await fetch(
+                        `${WORKER_URL}/get-level?path=${encodeURIComponent(path)}`
+                    );
+
+                    if (!levelResult.ok) {
+                        throw new Error(`Failed to load ${path}`);
+                    }
+
+                    const levelData = await levelResult.json();
+                    const level = levelData.level;
+
+                    const packs = packsList.filter((x) =>
                         x.levels.includes(path)
                     );
+
                     return [
                         {
                             ...level,
@@ -31,13 +59,15 @@ export async function fetchList() {
                         null,
                     ];
                 } catch {
-                    console.error(`Failed to load level #${rank + 1} ${path}.`);
+                    console.error(
+                        `Failed to load level #${rank + 1} ${path}.`
+                    );
                     return [null, path];
                 }
             })
         );
-    } catch {
-        console.error(`Failed to load list.`);
+    } catch (error) {
+        console.error("Failed to load list.", error);
         return null;
     }
 }
